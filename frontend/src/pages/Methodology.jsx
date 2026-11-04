@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Sigma, Scale, Cpu, Database, CheckCircle2 } from 'lucide-react';
+import { BookOpen, Sigma, Scale, Database, Clock, Layers } from 'lucide-react';
 
 export function Methodology() {
   return (
@@ -8,36 +8,77 @@ export function Methodology() {
       <div className="border-b border-slate-800 pb-4">
         <h2 className="text-xl font-bold text-white flex items-center gap-2">
           <BookOpen className="h-5 w-5 text-cyan-400" />
-          Market Architecture & Quant Methodology
+          Market Architecture & Quantitative Methodology
         </h2>
         <p className="text-xs text-slate-400 mt-1">
-          Technical specifications for GB electricity settlement periods, forecast metrics, and financial risk models
+          Technical specifications for Elexon BMRS API stream feeds, startTime matching, and error quantification metrics
         </p>
       </div>
 
-      {/* Grid Architecture */}
+      {/* Grid Architecture & Stream Feeds */}
       <div className="rounded-xl border border-slate-800/80 bg-slate-900/60 p-5 backdrop-blur-md space-y-3">
         <h3 className="text-sm font-bold text-white flex items-center gap-2">
           <Database className="h-4 w-4 text-cyan-400" />
-          Elexon BMRS Data Ingestion & Alignment
+          Real Elexon BMRS Stream Integration
         </h3>
         <p className="text-xs text-slate-300 leading-relaxed">
-          The platform integrates with the <strong>Elexon Balancing Mechanism Reporting Service (BMRS) API v1</strong> (the official data platform for Great Britain's electricity market).
+          The platform ingests real data directly from the official <strong>Elexon Balancing Mechanism Reporting Service (BMRS) API v1</strong> stream endpoints without relying on mock values:
         </p>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono pt-2">
-          <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
-            <span className="text-cyan-400 font-bold block mb-1">1. WINDFOR (Forecast Feed)</span>
-            <p className="text-slate-400 text-[11px] font-sans">
-              National Energy System Operator (NESO) aggregate day-ahead wind power forecasts published up to 8 times daily. Mapped to 48 half-hour settlement periods.
+          <div className="bg-slate-950/60 p-3.5 rounded-lg border border-slate-800 space-y-1">
+            <span className="text-cyan-400 font-bold block mb-1">1. Forecast: WINDFOR Stream</span>
+            <div className="text-[10px] text-slate-400 break-all bg-slate-900 p-1.5 rounded">
+              /datasets/WINDFOR/stream?publishDateTimeFrom=...&publishDateTimeTo=...
+            </div>
+            <p className="text-slate-300 text-[11px] font-sans pt-1">
+              National Energy System Operator (NESO) national-level wind power generation forecast, published up to 8 times daily on D-1.
             </p>
           </div>
-          <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
-            <span className="text-emerald-400 font-bold block mb-1">2. B1620 / FUELHH (Outturn Feed)</span>
-            <p className="text-slate-400 text-[11px] font-sans">
-              Actual metered renewable power generation broken down by fuel type: <em>Wind Offshore</em> and <em>Wind Onshore</em>. Aggregated per settlement period.
+
+          <div className="bg-slate-950/60 p-3.5 rounded-lg border border-slate-800 space-y-1">
+            <span className="text-emerald-400 font-bold block mb-1">2. Actual Outturn: FUELHH Stream</span>
+            <div className="text-[10px] text-slate-400 break-all bg-slate-900 p-1.5 rounded">
+              /datasets/FUELHH/stream?settlementDateFrom=...&settlementDateTo=...&fuelType=WIND
+            </div>
+            <p className="text-slate-300 text-[11px] font-sans pt-1">
+              Half-hourly national actual generation outturn specifically filtered for <code className="text-emerald-400">fuelType=WIND</code> across Great Britain.
             </p>
           </div>
         </div>
+      </div>
+
+      {/* StartTime Matching Logic */}
+      <div className="rounded-xl border border-slate-800/80 bg-slate-900/60 p-5 backdrop-blur-md space-y-3">
+        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+          <Clock className="h-4 w-4 text-cyan-400" />
+          Data Alignment & StartTime Matching Key
+        </h3>
+        <p className="text-xs text-slate-300 leading-relaxed">
+          Actual outturn generation from <strong>FUELHH</strong> is recorded on half-hourly settlement intervals (SPs 1–48), while <strong>WINDFOR</strong> forecasts provide hourly resolution blocks.
+        </p>
+        <div className="bg-slate-950/80 p-3.5 rounded-lg border border-slate-800 font-mono text-xs space-y-2">
+          <p className="text-slate-300">
+            <strong>Matching Key:</strong> Both datasets share the standardized ISO UTC <code className="text-cyan-400">startTime</code> attribute.
+          </p>
+          <p className="text-slate-300">
+            <strong>Alignment Logic:</strong> For every half-hourly settlement period in FUELHH, the exact hourly WINDFOR forecast matching that delivery window is joined.
+          </p>
+        </div>
+      </div>
+
+      {/* Decision Cutoff Selection */}
+      <div className="rounded-xl border border-slate-800/80 bg-slate-900/60 p-5 backdrop-blur-md space-y-3">
+        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+          <Layers className="h-4 w-4 text-amber-400" />
+          Purchasing Decision Cutoff (PublishTime Selection)
+        </h3>
+        <p className="text-xs text-slate-300 leading-relaxed">
+          In liberalized wholesale electricity markets (EPEX SPOT, Nord Pool), procurement teams must finalize power bids at the <strong>Day-Ahead Gate Closure (12:00 PM D-1)</strong>.
+        </p>
+        <p className="text-xs text-slate-300 leading-relaxed">
+          The platform filters the WINDFOR stream using <code className="text-cyan-400">publishTime</code> to select the latest forecast issued on or before the cutoff (typically the <strong>11:30 D-1 publish</strong>). Users can also toggle earlier publications (09:30, 07:30, 04:30) or later intraday runs (15:30, 18:30, 22:30) to evaluate forecast evolution.
+        </p>
       </div>
 
       {/* Mathematical Formulas */}
@@ -47,7 +88,7 @@ export function Methodology() {
           Quantitative Prediction Error Metrics
         </h3>
         <p className="text-xs text-slate-300">
-          Evaluated via vectorized NumPy and Pandas calculations in the backend engine:
+          Calculated dynamically from real matched data:
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -60,7 +101,7 @@ export function Methodology() {
               MAE = (1/N) * Σ |Forecast_i - Actual_i|
             </div>
             <p className="text-[11px] text-slate-400">
-              Measures the average linear magnitude of procurement volume error without directional bias.
+              Measures the average magnitude of prediction error without considering error direction.
             </p>
           </div>
 
@@ -73,7 +114,7 @@ export function Methodology() {
               RMSE = sqrt( (1/N) * Σ (Forecast_i - Actual_i)² )
             </div>
             <p className="text-[11px] text-slate-400">
-              Penalizes large outlier forecast errors heavily, critical for identifying grid stability risks.
+              Gives disproportionate weight to large error spikes, indicating grid balancing volatility.
             </p>
           </div>
 
@@ -86,7 +127,7 @@ export function Methodology() {
               MAPE = Median( |Forecast_i - Actual_i| / Actual_i ) * 100
             </div>
             <p className="text-[11px] text-slate-400">
-              Relative error percentage. Guarded against low generation denominators (&lt;10 MW) using median.
+              Relative error percentage. Guarded against low generation denominators using median.
             </p>
           </div>
 
@@ -99,31 +140,9 @@ export function Methodology() {
               MBE = (1/N) * Σ (Forecast_i - Actual_i)
             </div>
             <p className="text-[11px] text-slate-400">
-              Positive MBE indicates systematic over-forecasting (long risk); negative indicates under-forecasting (short risk).
+              Directional bias: Positive MBE indicates systematic over-forecasting; negative indicates under-forecasting.
             </p>
           </div>
-        </div>
-      </div>
-
-      {/* Procurement Imbalance Risk Quantification */}
-      <div className="rounded-xl border border-slate-800/80 bg-slate-900/60 p-5 backdrop-blur-md space-y-3">
-        <h3 className="text-sm font-bold text-white flex items-center gap-2">
-          <Scale className="h-4 w-4 text-amber-400" />
-          Financial Imbalance Cash-out Exposure Model
-        </h3>
-        <p className="text-xs text-slate-300 leading-relaxed">
-          In the GB electricity market, party positions are reconciled against the BSC Settlement Net Imbalance Volume (NIV).
-        </p>
-        <div className="bg-slate-950/80 p-3.5 rounded-lg border border-slate-800 font-mono text-xs space-y-2">
-          <p className="text-slate-300">
-            <strong>Imbalance Energy (MWh):</strong> |Error MW| × 0.5 hours per Settlement Period
-          </p>
-          <p className="text-slate-300">
-            <strong>Estimated Cashout (£):</strong> Σ (Imbalance MWh × System Imbalance Price)
-          </p>
-          <p className="text-[11px] text-slate-400 font-sans">
-            * Calibrated with benchmark UK System Buy/Sell Price spread of £68.50/MWh.
-          </p>
         </div>
       </div>
     </div>

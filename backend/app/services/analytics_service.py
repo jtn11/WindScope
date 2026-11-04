@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
@@ -9,81 +9,191 @@ from app.schemas.forecast import (
     SummaryMetrics,
     SettlementPeriodProfileItem,
     ErrorBin,
-    RampEvent,
     DailyAccuracyItem,
+    ForecastPublishRun,
 )
+from app.utils.date_utils import parse_iso_datetime, get_settlement_period
 
 logger = logging.getLogger("analytics_service")
-
-# Average UK imbalance cashout penalty (£/MWh)
-ESTIMATED_CASHOUT_PRICE_GBP = 68.50
-NOMINAL_GB_WIND_CAPACITY_MW = 29500.0
 
 
 class AnalyticsService:
     @staticmethod
-    def merge_and_align_data(
+    def get_available_publish_times(
         forecasts: List[Dict[str, Any]], 
-        actuals: List[Dict[str, Any]]
+        target_date: date
+    ) -> List[str]:
+        """
+        Extracts all distinct WINDFOR publishTime values that forecast the target delivery date.
+        """
+        target_prefix = target_date.strftime("%Y-%m-%d")
+        matching = [
+            f["publishTime"] for f in forecasts 
+            if f.get("startTime", "").startswith(target_prefix) and "publishTime" in f
+        ]
+        return sorted(list(set(matching)))
+
+    @staticmethod
+    def filter_forecast_at_cutoff(
+        forecasts: List[Dict[str, Any]],
+        target_date: date,
+        decision_cutoff: str = "12:00",
+        specific_publish_time: Optional[str] = None
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """
+        Filters WINDFOR forecasts to select the publication available at the purchasing decision cutoff.
+        
+        Standard Day-Ahead Market (DAP) Gate Closure is 12:00 on D-1.
+        Elexon publishes WINDFOR on D-1 at ~02:30, 04:30, 07:30, 09:30, 11:30, 15:30, 18:30, 22:30.
+        At the 12:00 D-1 cutoff, the 11:30 D-1 publish is selected.
+        """
+        target_prefix = target_date.strftime("%Y-%m-%d")
+        day_forecasts = [f for f in forecasts if f.get("startTime", "").startswith(target_prefix)]
+
+        if not day_forecasts:
+            return [], None
+
+        # If user explicitly chose a specific publishTime
+        if specific_publish_time:
+            matching = [f for f in day_forecasts if f.get("publishTime") == specific_publish_time]
+            if matching:
+                return matching, specific_publish_time
+
+        # Calculate D-1 cutoff timestamp
+        d_minus_1 = target_date - timedelta(days=1)
+        cutoff_hour = 12
+        cutoff_min = 0
+        if ":" in decision_cutoff:
+            try:
+                parts = decision_cutoff.split(":")
+                cutoff_hour = int(parts[0])
+                cutoff_min = int(parts[1])
+            except Exception:
+                cutoff_hour = 12
+                cutoff_min = 0
+
+        cutoff_dt = datetime.combine(d_minus_1, datetime.min.time(), tzinfo=timezone.utc).replace(
+            hour=cutoff_hour, minute=cutoff_min
+        )
+        cutoff_iso = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Find all publishes on or before the cutoff
+        available_publishes = sorted(list(set(f["publishTime"] for f in day_forecasts)))
+        eligible_publishes = [p for p in available_publishes if p <= cutoff_iso]
+
+        selected_publish = eligible_publishes[-1] if eligible_publishes else (available_publishes[0] if available_publishes else None)
+
+        if not selected_publish:
+            return [], None
+
+        selected_forecasts = [f for f in day_forecasts if f.get("publishTime") == selected_publish]
+        return selected_forecasts, selected_publish
+
+    @staticmethod
+    def match_actual_and_forecast_on_starttime(
+        actuals: List[Dict[str, Any]],
+        forecasts: List[Dict[str, Any]],
+        selected_publish_time: Optional[str] = None
     ) -> pd.DataFrame:
         """
-        Merges forecast and actual generation feeds into an aligned Pandas DataFrame
-        indexed on timestamp and settlement period.
+        Matches actual generation (FUELHH) and forecast records (WINDFOR) using startTime.
+        Handles both exact half-hour matches and hourly forecast alignment across settlement periods.
         """
-        if not forecasts:
+        if not actuals and not forecasts:
             return pd.DataFrame(columns=[
-                "timestamp", "settlementPeriod", "forecastMW", 
+                "timestamp", "startTime", "settlementPeriod", "forecastMW",
                 "actualMW", "errorMW", "absoluteErrorMW", "percentageError",
-                "offshoreActualMW", "onshoreActualMW", "status"
+                "forecastPublishTime", "status"
             ])
 
-        df_fc = pd.DataFrame(forecasts)
-        # Ensure timestamp is datetime with UTC
-        df_fc["timestamp"] = pd.to_datetime(df_fc["timestamp"], utc=True)
-        # Deduplicate on timestamp if multiple forecast publishes exist, keep latest
-        df_fc = df_fc.sort_values(by=["timestamp"]).drop_duplicates(subset=["timestamp"], keep="last")
+        # Map forecasts by startTime
+        fc_map: Dict[str, Dict[str, Any]] = {}
+        for f in forecasts:
+            st = f.get("startTime")
+            if st:
+                fc_map[st] = f
 
+        rows = []
         if actuals:
-            df_act = pd.DataFrame(actuals)
-            df_act["timestamp"] = pd.to_datetime(df_act["timestamp"], utc=True)
-            df_act = df_act.sort_values(by=["timestamp"]).drop_duplicates(subset=["timestamp"], keep="last")
-            df = pd.merge(df_fc, df_act, on=["timestamp", "settlementPeriod"], how="left")
+            for act in actuals:
+                st = act.get("startTime")
+                sp = act.get("settlementPeriod", 1)
+                act_mw = act.get("actualMW")
+
+                # Match on startTime:
+                # 1. Exact match (e.g. 00:00:00Z)
+                # 2. Hourly block match for :30 periods (e.g. 00:30:00Z matches 00:00:00Z forecast)
+                fc_entry = fc_map.get(st)
+                if not fc_entry and st and len(st) >= 14:
+                    hour_key = st[:14] + "00:00Z"
+                    fc_entry = fc_map.get(hour_key)
+
+                fc_mw = fc_entry.get("forecastMW") if fc_entry else None
+                pub_time = fc_entry.get("publishTime", selected_publish_time) if fc_entry else selected_publish_time
+
+                # Calculate errors if both are present
+                err_mw = None
+                abs_err = None
+                pct_err = None
+                status = "PENDING_ACTUAL"
+
+                if fc_mw is not None and act_mw is not None:
+                    err_mw = round(fc_mw - act_mw, 2)
+                    abs_err = round(abs(err_mw), 2)
+                    pct_err = round((abs_err / act_mw) * 100.0, 2) if act_mw > 10.0 else None
+                    if err_mw > 300:
+                        status = "OVER_FORECAST"
+                    elif err_mw < -300:
+                        status = "UNDER_FORECAST"
+                    else:
+                        status = "ON_TARGET"
+                elif fc_mw is not None and act_mw is None:
+                    status = "PENDING_ACTUAL"
+                elif fc_mw is None and act_mw is not None:
+                    status = "MISSING_FORECAST"
+
+                dt = parse_iso_datetime(st) if st else datetime.now(timezone.utc)
+                rows.append({
+                    "timestamp": dt,
+                    "startTime": st,
+                    "settlementPeriod": sp,
+                    "forecastMW": fc_mw,
+                    "actualMW": act_mw,
+                    "errorMW": err_mw,
+                    "absoluteErrorMW": abs_err,
+                    "percentageError": pct_err,
+                    "forecastPublishTime": pub_time,
+                    "status": status,
+                })
         else:
-            df = df_fc.copy()
-            df["actualMW"] = np.nan
-            df["offshoreActualMW"] = np.nan
-            df["onshoreActualMW"] = np.nan
+            # If actuals are not yet available (e.g. delivery in future)
+            for f in forecasts:
+                st = f.get("startTime")
+                fc_mw = f.get("forecastMW")
+                dt = parse_iso_datetime(st) if st else datetime.now(timezone.utc)
+                sp = get_settlement_period(dt)
+                rows.append({
+                    "timestamp": dt,
+                    "startTime": st,
+                    "settlementPeriod": sp,
+                    "forecastMW": fc_mw,
+                    "actualMW": None,
+                    "errorMW": None,
+                    "absoluteErrorMW": None,
+                    "percentageError": None,
+                    "forecastPublishTime": f.get("publishTime", selected_publish_time),
+                    "status": "PENDING_ACTUAL",
+                })
 
-        # Fill missing values and compute errors
-        has_actual = ~df["actualMW"].isna()
-        df["errorMW"] = np.where(has_actual, df["forecastMW"] - df["actualMW"], np.nan)
-        df["absoluteErrorMW"] = np.where(has_actual, np.abs(df["errorMW"]), np.nan)
-        
-        # Percentage error guarded against zero division
-        df["percentageError"] = np.where(
-            has_actual & (df["actualMW"] > 10.0),
-            (df["absoluteErrorMW"] / df["actualMW"]) * 100.0,
-            np.nan
-        )
-
-        def classify_status(row):
-            if pd.isna(row["actualMW"]):
-                return "PENDING_ACTUAL"
-            err = row["errorMW"]
-            if err > 300:
-                return "OVER_FORECAST"
-            elif err < -300:
-                return "UNDER_FORECAST"
-            else:
-                return "ON_TARGET"
-
-        df["status"] = df.apply(classify_status, axis=1)
+        df = pd.DataFrame(rows)
+        if not df.empty and "startTime" in df.columns:
+            df = df.sort_values(by=["startTime"])
         return df
 
     @classmethod
     def calculate_summary_metrics(cls, df: pd.DataFrame) -> SummaryMetrics:
         """
-        Calculates core procurement metrics: MAE, RMSE, MAPE, Bias, Reliability Score, and Financial Exposure.
+        Calculates MAE, RMSE, MAPE, Mean Bias Error from real aligned data.
         """
         if df.empty:
             return SummaryMetrics(
@@ -97,16 +207,14 @@ class AnalyticsService:
                 reliabilityScore=100.0,
                 maxOverForecastMW=0.0,
                 maxUnderForecastMW=0.0,
-                rampRateAlertCount=0,
-                estimatedImbalanceCostGbp=0.0,
                 dataPointCount=0,
                 accuracyGrade="A"
             )
 
-        # 30-min settlement intervals convert to MWh by multiplying by 0.5
-        total_fc_mwh = float(df["forecastMW"].sum() * 0.5)
-        
-        evaluated = df.dropna(subset=["actualMW", "errorMW"])
+        valid_fc = df["forecastMW"].dropna()
+        total_fc_mwh = float(valid_fc.sum() * 0.5) if not valid_fc.empty else 0.0
+
+        evaluated = df.dropna(subset=["actualMW", "forecastMW", "errorMW"])
         n_points = len(evaluated)
 
         if n_points == 0:
@@ -121,8 +229,6 @@ class AnalyticsService:
                 reliabilityScore=100.0,
                 maxOverForecastMW=0.0,
                 maxUnderForecastMW=0.0,
-                rampRateAlertCount=0,
-                estimatedImbalanceCostGbp=0.0,
                 dataPointCount=0,
                 accuracyGrade="A"
             )
@@ -130,21 +236,20 @@ class AnalyticsService:
         total_act_mwh = float(evaluated["actualMW"].sum() * 0.5)
         mae = float(evaluated["absoluteErrorMW"].mean())
         rmse = float(np.sqrt((evaluated["errorMW"] ** 2).mean()))
-        
+
         valid_mape = evaluated["percentageError"].dropna()
         mape = float(valid_mape.median()) if len(valid_mape) > 0 else 0.0
         bias = float(evaluated["errorMW"].mean())
 
-        peak_capacity = max(float(evaluated["actualMW"].max()), NOMINAL_GB_WIND_CAPACITY_MW * 0.6)
-        nmae = (mae / peak_capacity) * 100.0
+        peak_gen = max(float(evaluated["actualMW"].max()), 1000.0)
+        nmae = (mae / peak_gen) * 100.0
 
         max_over = float(evaluated["errorMW"].max())
-        min_error = float(evaluated["errorMW"].min())
-        max_under = abs(min_error) if min_error < 0 else 0.0
+        min_err = float(evaluated["errorMW"].min())
+        max_under = abs(min_err) if min_err < 0 else 0.0
 
-        # Procurement Reliability Score (0-100)
-        # Deduct penalties for NMAE and Bias
-        score = 100.0 - (nmae * 3.8) - (abs(bias) / peak_capacity * 40.0)
+        # Reliability score (0-100)
+        score = 100.0 - (nmae * 2.8) - (abs(bias) / peak_gen * 25.0)
         score = max(5.0, min(99.0, score))
 
         if score >= 88.0:
@@ -155,13 +260,6 @@ class AnalyticsService:
             grade = "C"
         else:
             grade = "D"
-
-        # Estimated Imbalance exposure (£): Energy volume error * half-hour (0.5) * cashout penalty
-        imbalance_mwh = evaluated["absoluteErrorMW"].sum() * 0.5
-        imbalance_cost = float(imbalance_mwh * ESTIMATED_CASHOUT_PRICE_GBP)
-
-        # Detect extreme ramp events
-        ramp_alerts = cls.detect_ramp_events(df)
 
         return SummaryMetrics(
             totalForecastMWh=round(total_fc_mwh, 2),
@@ -174,8 +272,6 @@ class AnalyticsService:
             reliabilityScore=round(score, 1),
             maxOverForecastMW=round(max_over, 2),
             maxUnderForecastMW=round(max_under, 2),
-            rampRateAlertCount=len(ramp_alerts),
-            estimatedImbalanceCostGbp=round(imbalance_cost, 2),
             dataPointCount=n_points,
             accuracyGrade=grade
         )
@@ -183,27 +279,30 @@ class AnalyticsService:
     @staticmethod
     def calculate_settlement_period_profile(df: pd.DataFrame) -> List[SettlementPeriodProfileItem]:
         """
-        Computes 48 settlement period diurnal profile across selected timeframe.
+        Computes the 48-period diurnal error profile from real matched data.
         """
         results = []
-        if df.empty:
+        if df.empty or "settlementPeriod" not in df.columns:
             return results
 
-        evaluated = df.copy()
-        
         for sp in range(1, 49):
             hours = (sp - 1) // 2
-            minutes = "30" if (sp - 1) % 2 == 1 else "00"
-            label = f"{hours:02d}:{minutes}"
+            mins = "30" if (sp - 1) % 2 == 1 else "00"
+            label = f"{hours:02d}:{mins}"
 
-            sp_data = evaluated[evaluated["settlementPeriod"] == sp]
+            sp_data = df[df["settlementPeriod"] == sp]
             if sp_data.empty:
                 continue
 
-            avg_fc = float(sp_data["forecastMW"].mean()) if not sp_data["forecastMW"].isna().all() else 0.0
-            avg_act = float(sp_data["actualMW"].mean()) if not sp_data["actualMW"].isna().all() else 0.0
-            avg_err = float(sp_data["errorMW"].mean()) if not sp_data["errorMW"].isna().all() else 0.0
-            avg_abs = float(sp_data["absoluteErrorMW"].mean()) if not sp_data["absoluteErrorMW"].isna().all() else 0.0
+            valid_fc = sp_data["forecastMW"].dropna()
+            valid_act = sp_data["actualMW"].dropna()
+            valid_err = sp_data["errorMW"].dropna()
+            valid_abs = sp_data["absoluteErrorMW"].dropna()
+
+            avg_fc = float(valid_fc.mean()) if not valid_fc.empty else 0.0
+            avg_act = float(valid_act.mean()) if not valid_act.empty else 0.0
+            avg_err = float(valid_err.mean()) if not valid_err.empty else 0.0
+            avg_abs = float(valid_abs.mean()) if not valid_abs.empty else 0.0
 
             results.append(SettlementPeriodProfileItem(
                 settlementPeriod=sp,
@@ -220,7 +319,7 @@ class AnalyticsService:
     @staticmethod
     def calculate_error_distribution(df: pd.DataFrame) -> Tuple[List[ErrorBin], float, float, float, float]:
         """
-        Generates histogram bins, quantiles (p10, p50, p90), and skewness of forecast errors.
+        Computes real error histogram bins, P10, P50 (median bias), P90, and skewness.
         """
         evaluated = df.dropna(subset=["errorMW"])
         if evaluated.empty:
@@ -233,12 +332,10 @@ class AnalyticsService:
         p50 = float(np.percentile(errors, 50))
         p90 = float(np.percentile(errors, 90))
 
-        # Pearson skewness coefficient
         mean_err = np.mean(errors)
         std_err = np.std(errors)
         skewness = float(((errors - mean_err) ** 3).mean() / (std_err ** 3)) if std_err > 0 else 0.0
 
-        # Define bins for wind errors in MW
         bins_def = [
             ("< -2000 MW", -float("inf"), -2000.0),
             ("-2000 to -1000 MW", -2000.0, -1000.0),
@@ -270,95 +367,52 @@ class AnalyticsService:
 
         return bins, round(p10, 2), round(p50, 2), round(p90, 2), round(skewness, 2)
 
-    @staticmethod
-    def detect_ramp_events(df: pd.DataFrame, threshold_mw_per_hour: float = 1200.0) -> List[RampEvent]:
-        """
-        Detects rapid generation change events (> threshold MW/hr) where forecast and actual ramp rate diverged.
-        """
-        if len(df) < 2:
-            return []
-
-        df_sorted = df.sort_values(by="timestamp").copy()
-        
-        # Calculate half-hourly delta (MW change per 30 mins, multiply by 2 for MW/hr equivalent)
-        df_sorted["fcDelta"] = df_sorted["forecastMW"].diff() * 2.0
-        
-        if "actualMW" in df_sorted.columns and not df_sorted["actualMW"].isna().all():
-            df_sorted["actDelta"] = df_sorted["actualMW"].diff() * 2.0
-            df_sorted["rampMismatch"] = np.abs(df_sorted["fcDelta"] - df_sorted["actDelta"])
-        else:
-            df_sorted["actDelta"] = np.nan
-            df_sorted["rampMismatch"] = 0.0
-
-        events = []
-        for idx, row in df_sorted.iterrows():
-            fc_delta = row["fcDelta"]
-            act_delta = row["actDelta"]
-            mismatch = row["rampMismatch"]
-
-            if pd.isna(fc_delta):
-                continue
-
-            max_delta = max(abs(fc_delta), abs(act_delta) if not pd.isna(act_delta) else 0.0)
-
-            if max_delta >= threshold_mw_per_hour:
-                if max_delta >= 2400.0:
-                    sev = "CRITICAL"
-                elif max_delta >= 1800.0:
-                    sev = "HIGH"
-                elif max_delta >= 1400.0:
-                    sev = "MEDIUM"
-                else:
-                    sev = "LOW"
-
-                events.append(RampEvent(
-                    timestamp=row["timestamp"].to_pydatetime(),
-                    settlementPeriod=int(row["settlementPeriod"]),
-                    forecastDeltaMW=round(float(fc_delta), 2),
-                    actualDeltaMW=round(float(act_delta), 2) if not pd.isna(act_delta) else 0.0,
-                    rampMismatchMW=round(float(mismatch), 2) if not pd.isna(mismatch) else 0.0,
-                    severity=sev
-                ))
-
-        return events
-
     @classmethod
-    def calculate_daily_accuracy(cls, df: pd.DataFrame) -> List[DailyAccuracyItem]:
+    def get_forecast_publication_history(
+        cls,
+        target_date: date,
+        actuals: List[Dict[str, Any]],
+        all_forecasts: List[Dict[str, Any]]
+    ) -> List[ForecastPublishRun]:
         """
-        Calculates daily summary metrics across a range of days for trend benchmarking.
+        Builds the forecast evolution history across all publication runs for target delivery date.
         """
-        if df.empty or "actualMW" not in df.columns:
-            return []
+        target_prefix = target_date.strftime("%Y-%m-%d")
+        matching_fc = [f for f in all_forecasts if f.get("startTime", "").startswith(target_prefix)]
+        
+        publishes = sorted(list(set(f["publishTime"] for f in matching_fc)))
+        runs = []
 
-        df_clean = df.dropna(subset=["actualMW", "errorMW"]).copy()
-        if df_clean.empty:
-            return []
+        d_minus_1 = target_date - timedelta(days=1)
+        d_minus_1_str = d_minus_1.strftime("%Y-%m-%d")
 
-        df_clean["dateStr"] = df_clean["timestamp"].dt.strftime("%Y-%m-%d")
-        grouped = df_clean.groupby("dateStr")
+        for pub in publishes:
+            pts = [f for f in matching_fc if f.get("publishTime") == pub]
+            df = cls.match_actual_and_forecast_on_starttime(actuals, pts, selected_publish_time=pub)
+            metrics = cls.calculate_summary_metrics(df)
 
-        items = []
-        for date_str, group in grouped:
-            if len(group) < 12:  # require at least 6 hours of data
-                continue
-            metrics = cls.calculate_summary_metrics(group)
-            peak_act = float(group["actualMW"].max())
-            peak_fc = float(group["forecastMW"].max())
+            # Determine human-friendly cutoff label
+            time_part = pub[11:16] if len(pub) >= 16 else ""
+            if pub.startswith(d_minus_1_str):
+                if time_part <= "11:30":
+                    label = f"Day-Ahead {time_part} D-1 (Gate Closure Basis)"
+                else:
+                    label = f"Intraday {time_part} D-1"
+            elif pub.startswith(target_prefix):
+                label = f"Intraday {time_part} (Delivery Day)"
+            else:
+                label = f"Published {pub}"
 
-            items.append(DailyAccuracyItem(
-                date=date_str,
-                maeMW=metrics.maeMW,
-                rmseMW=metrics.rmseMW,
-                mapePercent=metrics.mapePercent,
-                meanBiasMW=metrics.meanBiasMW,
-                reliabilityScore=metrics.reliabilityScore,
-                peakActualMW=round(peak_act, 2),
-                peakForecastMW=round(peak_fc, 2),
-                accuracyGrade=metrics.accuracyGrade,
+            runs.append(ForecastPublishRun(
+                publishTime=pub,
+                cutoffLabel=label,
+                maeMW=metrics.maeMW if metrics.dataPointCount > 0 else None,
+                rmseMW=metrics.rmseMW if metrics.dataPointCount > 0 else None,
+                meanBiasMW=metrics.meanBiasMW if metrics.dataPointCount > 0 else None,
+                data=[{"startTime": p["startTime"], "forecastMW": p["forecastMW"]} for p in pts]
             ))
 
-        items.sort(key=lambda x: x.date, reverse=True)
-        return items
+        return runs
 
 
 analytics_service = AnalyticsService()

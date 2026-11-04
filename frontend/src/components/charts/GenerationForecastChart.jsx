@@ -8,37 +8,32 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  Legend,
   CartesianGrid,
   ReferenceLine,
 } from 'recharts';
 import { formatMW, formatPercent, formatTimeOnly } from '../../utils/formatters';
-import { Eye, EyeOff, Layers, Zap } from 'lucide-react';
+import { Zap } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export function GenerationForecastChart({ data = [], height = 400 }) {
   const [showForecast, setShowForecast] = useState(true);
   const [showActual, setShowActual] = useState(true);
   const [showErrorBars, setShowErrorBars] = useState(true);
-  const [showBreakdown, setShowBreakdown] = useState(false);
 
   // Format chart data for smooth rendering
   const formattedData = useMemo(() => {
     return data.map((item) => {
       const dt = new Date(item.timestamp);
-      const timeStr = `${dt.getUTCDate()} ${dt.toLocaleString('en-GB', { month: 'short' })} ${formatTimeOnly(item.timestamp)}`;
+      const timeStr = `${dt.getUTCDate()} Jan ${formatTimeOnly(item.timestamp)}`;
       
       return {
         ...item,
         timeLabel: timeStr,
-        // Separate positive error (over-forecast) and negative error (under-forecast)
-        overForecastMW: item.errorMW && item.errorMW > 0 ? item.errorMW : 0,
-        underForecastMW: item.errorMW && item.errorMW < 0 ? item.errorMW : 0,
       };
     });
   }, [data]);
 
-  const CustomTooltip = ({ active, payload, label }) => {
+  const CustomTooltip = ({ active, payload }) => {
     if (!active || !payload || !payload.length) return null;
     const pt = payload[0].payload;
 
@@ -55,33 +50,20 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
           <div className="flex justify-between items-center text-slate-300">
             <span className="flex items-center gap-1.5 text-cyan-400">
               <span className="h-2 w-2 rounded-full bg-cyan-400 inline-block" />
-              Day-Ahead Forecast:
+              WINDFOR Forecast:
             </span>
             <span className="font-bold text-white">{formatMW(pt.forecastMW)}</span>
           </div>
 
-          {pt.actualMW !== null && (
+          {pt.actualMW !== null && pt.actualMW !== undefined ? (
             <>
               <div className="flex justify-between items-center text-slate-300">
                 <span className="flex items-center gap-1.5 text-emerald-400">
                   <span className="h-2 w-2 rounded-full bg-emerald-400 inline-block" />
-                  Actual Generation:
+                  FUELHH Actual:
                 </span>
                 <span className="font-bold text-white">{formatMW(pt.actualMW)}</span>
               </div>
-
-              {pt.offshoreActualMW !== null && (
-                <div className="pl-3.5 text-[11px] flex justify-between text-slate-400">
-                  <span>↳ Offshore:</span>
-                  <span>{formatMW(pt.offshoreActualMW)}</span>
-                </div>
-              )}
-              {pt.onshoreActualMW !== null && (
-                <div className="pl-3.5 text-[11px] flex justify-between text-slate-400">
-                  <span>↳ Onshore:</span>
-                  <span>{formatMW(pt.onshoreActualMW)}</span>
-                </div>
-              )}
 
               <div className="border-t border-slate-800 pt-1.5 mt-1.5 flex justify-between items-center">
                 <span className="text-slate-400">Prediction Error:</span>
@@ -95,18 +77,16 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
                 </span>
               </div>
 
-              {pt.percentageError !== null && (
+              {pt.percentageError !== null && pt.percentageError !== undefined && (
                 <div className="flex justify-between items-center text-[11px] text-slate-400">
                   <span>Error %:</span>
                   <span className="text-slate-200">{formatPercent(pt.percentageError)}</span>
                 </div>
               )}
             </>
-          )}
-
-          {pt.actualMW === null && (
-            <div className="text-[11px] text-cyan-400/80 italic pt-1">
-              • Delivery pending (Day-Ahead Horizon)
+          ) : (
+            <div className="text-[11px] text-cyan-400/80 italic pt-1 border-t border-slate-800">
+              • Actual outturn pending / not available
             </div>
           )}
         </div>
@@ -121,10 +101,10 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
         <div>
           <h3 className="text-base font-bold text-white flex items-center gap-2">
             <Zap className="h-4 w-4 text-cyan-400" />
-            Day-Ahead Wind Forecast vs Actual Generation
+            Forecast vs Actual Wind Generation (January 2026)
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Half-hourly settlement intervals across Great Britain transmission system (MW)
+            Matched half-hourly settlement intervals using startTime • GB National Grid (MW)
           </p>
         </div>
 
@@ -140,7 +120,7 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
             )}
           >
             <span className="h-2 w-2 rounded-full bg-cyan-400" />
-            Forecast
+            Forecast (WINDFOR)
           </button>
 
           <button
@@ -153,7 +133,7 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
             )}
           >
             <span className="h-2 w-2 rounded-full bg-emerald-400" />
-            Actual
+            Actual (FUELHH)
           </button>
 
           <button
@@ -168,19 +148,6 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
             <span className="h-2 w-2 rounded-full bg-amber-400" />
             Error Delta
           </button>
-
-          <button
-            onClick={() => setShowBreakdown(!showBreakdown)}
-            className={cn(
-              'px-2.5 py-1 rounded-md border font-medium flex items-center gap-1.5 transition-colors',
-              showBreakdown
-                ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
-                : 'bg-slate-800 text-slate-400 border-slate-700'
-            )}
-          >
-            <Layers className="h-3 w-3" />
-            Offshore/Onshore
-          </button>
         </div>
       </div>
 
@@ -193,10 +160,6 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
                 <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.35} />
                 <stop offset="95%" stopColor="#38bdf8" stopOpacity={0.0} />
               </linearGradient>
-              <linearGradient id="actualGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#10b981" stopOpacity={0.35} />
-                <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
-              </linearGradient>
             </defs>
 
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
@@ -204,7 +167,7 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
             <XAxis
               dataKey="timeLabel"
               stroke="#64748b"
-              fontSize={11}
+              fontSize={10}
               tickLine={false}
               interval="preserveStartEnd"
               minTickGap={45}
@@ -232,30 +195,6 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
               />
             )}
 
-            {/* Offshore / Onshore Breakdown */}
-            {showBreakdown && (
-              <>
-                <Line
-                  type="monotone"
-                  dataKey="offshoreActualMW"
-                  stroke="#818cf8"
-                  strokeWidth={1.5}
-                  strokeDasharray="4 4"
-                  dot={false}
-                  name="Offshore Actual"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="onshoreActualMW"
-                  stroke="#a78bfa"
-                  strokeWidth={1.5}
-                  strokeDasharray="2 2"
-                  dot={false}
-                  name="Onshore Actual"
-                />
-              </>
-            )}
-
             {/* Day-Ahead Forecast Area */}
             {showForecast && (
               <Area
@@ -265,11 +204,11 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
                 strokeWidth={2.5}
                 fillOpacity={1}
                 fill="url(#forecastGradient)"
-                name="Day-Ahead Forecast"
+                name="Forecast"
               />
             )}
 
-            {/* Actual Outturn Generation Area */}
+            {/* Actual Outturn Generation Line */}
             {showActual && (
               <Line
                 type="monotone"
@@ -277,7 +216,7 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
                 stroke="#10b981"
                 strokeWidth={2.5}
                 dot={false}
-                name="Actual Generation"
+                name="Actual"
               />
             )}
           </ComposedChart>
@@ -288,16 +227,16 @@ export function GenerationForecastChart({ data = [], height = 400 }) {
       <div className="mt-3 flex flex-wrap items-center justify-between text-[11px] text-slate-400 border-t border-slate-800/80 pt-2.5">
         <div className="flex items-center gap-4">
           <span className="flex items-center gap-1.5">
-            <span className="h-2 w-4 rounded bg-cyan-400 inline-block" /> Day-Ahead Forecast (WINDFOR)
+            <span className="h-2 w-4 rounded bg-cyan-400 inline-block" /> Forecast (WINDFOR Stream)
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="h-2 w-4 rounded bg-emerald-400 inline-block" /> Actual Outturn (B1620)
+            <span className="h-2 w-4 rounded bg-emerald-400 inline-block" /> Actual Generation (FUELHH Stream)
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="h-2 w-4 rounded bg-amber-400 inline-block" /> Over/Under Error Residual
+            <span className="h-2 w-4 rounded bg-amber-400 inline-block" /> Prediction Error Residual (Forecast - Actual)
           </span>
         </div>
-        <span className="font-mono text-slate-500">Source: Elexon BMRS v1 Data Portal</span>
+        <span className="font-mono text-slate-500">Source: Elexon BMRS Real Data Stream</span>
       </div>
     </div>
   );

@@ -6,31 +6,38 @@ import { Accuracy } from './pages/Accuracy';
 import { Methodology } from './pages/Methodology';
 import { useForecastData } from './hooks/useForecastData';
 import { useAccuracyMetrics } from './hooks/useAccuracyMetrics';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 
 export default function App() {
   const [currentTab, setTab] = useState('dashboard');
+
   const {
     data,
     metrics,
     loading: forecastLoading,
     error: forecastError,
-    days,
-    setDays,
+    startDate,
+    endDate,
+    cutoff,
+    selectedPublishTime,
+    availablePublishTimes,
+    publicationHistory,
+    setCutoff,
+    setSelectedPublishTime,
+    setDateRange,
     source,
     lastUpdated,
     refresh: refreshForecast,
-  } = useForecastData(2);
+  } = useForecastData('2026-01-01', '2026-01-01');
 
   const {
     summary,
     settlementProfile,
     distribution,
-    ramps,
     dailyLeaderboard,
     loading: metricsLoading,
     refresh: refreshMetrics,
-  } = useAccuracyMetrics();
+  } = useAccuracyMetrics(startDate, endDate, cutoff);
 
   const handleRefreshAll = () => {
     refreshForecast();
@@ -43,8 +50,11 @@ export default function App() {
     <Layout
       currentTab={currentTab}
       setTab={setTab}
-      days={days}
-      setDays={setDays}
+      startDate={startDate}
+      endDate={endDate}
+      setDateRange={setDateRange}
+      cutoff={cutoff}
+      setCutoff={setCutoff}
       onRefresh={handleRefreshAll}
       loading={isLoading}
       lastUpdated={lastUpdated}
@@ -52,11 +62,11 @@ export default function App() {
     >
       {/* Alert banner if error occurred */}
       {forecastError && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-300 flex items-center justify-between">
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-300 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 flex-shrink-0 text-amber-400" />
+            <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-400" />
             <span>
-              Live upstream notice: {forecastError}. Using resilient GB Grid simulation fallback.
+              Elexon Stream API notice: {forecastError}.
             </span>
           </div>
           <button
@@ -73,8 +83,13 @@ export default function App() {
         <Dashboard
           data={data}
           metrics={metrics || summary}
+          publicationHistory={publicationHistory}
+          selectedPublishTime={selectedPublishTime}
+          onSelectPublishTime={setSelectedPublishTime}
+          startDate={startDate}
+          endDate={endDate}
+          cutoff={cutoff}
           loading={isLoading}
-          ramps={ramps}
         />
       )}
 
@@ -82,6 +97,12 @@ export default function App() {
         <Forecast
           data={data}
           metrics={metrics || summary}
+          publicationHistory={publicationHistory}
+          selectedPublishTime={selectedPublishTime}
+          onSelectPublishTime={setSelectedPublishTime}
+          startDate={startDate}
+          endDate={endDate}
+          cutoff={cutoff}
           loading={isLoading}
         />
       )}
@@ -93,6 +114,8 @@ export default function App() {
           settlementProfile={settlementProfile}
           distribution={distribution}
           dailyLeaderboard={dailyLeaderboard}
+          startDate={startDate}
+          endDate={endDate}
           loading={isLoading}
         />
       )}

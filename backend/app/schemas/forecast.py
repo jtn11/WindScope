@@ -1,18 +1,18 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 
 class WindDataPoint(BaseModel):
-    timestamp: datetime = Field(..., description="UTC timestamp of the half-hour settlement interval")
+    timestamp: datetime = Field(..., description="UTC timestamp of the settlement interval")
+    startTime: str = Field(..., description="Elexon startTime string matching actual and forecast feeds")
     settlementPeriod: int = Field(..., ge=1, le=48, description="GB Settlement Period (1-48)")
-    forecastMW: float = Field(..., description="Day-ahead forecasted wind generation in MW")
-    actualMW: Optional[float] = Field(None, description="Actual outturn wind generation in MW (if available)")
-    errorMW: Optional[float] = Field(None, description="Forecast Error: Forecast - Actual (positive = over-forecast)")
-    absoluteErrorMW: Optional[float] = Field(None, description="Absolute Forecast Error |Forecast - Actual|")
+    forecastMW: float = Field(..., description="Forecasted wind generation in MW at decision cutoff")
+    actualMW: Optional[float] = Field(None, description="Actual national outturn wind generation in MW from FUELHH")
+    errorMW: Optional[float] = Field(None, description="Prediction Error: Forecast - Actual (positive = over-forecast)")
+    absoluteErrorMW: Optional[float] = Field(None, description="Absolute Prediction Error: |Forecast - Actual|")
     percentageError: Optional[float] = Field(None, description="Percentage Error relative to actual generation (%)")
-    offshoreActualMW: Optional[float] = Field(None, description="Actual offshore wind generation in MW")
-    onshoreActualMW: Optional[float] = Field(None, description="Actual onshore wind generation in MW")
+    forecastPublishTime: Optional[str] = Field(None, description="Publication timestamp of the selected forecast")
     status: Optional[str] = Field(
         None, 
         description="Forecast category: OVER_FORECAST, UNDER_FORECAST, ON_TARGET, or PENDING_ACTUAL"
@@ -20,20 +20,18 @@ class WindDataPoint(BaseModel):
 
 
 class SummaryMetrics(BaseModel):
-    totalForecastMWh: float = Field(..., description="Total forecasted energy in MWh")
+    totalForecastMWh: float = Field(..., description="Total forecasted energy volume in MWh")
     totalActualMWh: float = Field(..., description="Total actual energy outturn in MWh")
     maeMW: float = Field(..., description="Mean Absolute Error in MW")
     rmseMW: float = Field(..., description="Root Mean Squared Error in MW")
-    mapePercent: float = Field(..., description="Mean Absolute Percentage Error (%)")
-    meanBiasMW: float = Field(..., description="Mean Bias Error in MW (positive = systematic over-forecast)")
+    mapePercent: float = Field(..., description="Median Absolute Percentage Error (%)")
+    meanBiasMW: float = Field(..., description="Mean Bias Error in MW (positive = over-forecast, negative = under-forecast)")
     nmaePercent: float = Field(..., description="Normalized MAE against peak generation (%)")
-    reliabilityScore: float = Field(..., ge=0, le=100, description="Procurement Reliability Index (0-100)")
+    reliabilityScore: float = Field(..., ge=0, le=100, description="Forecast Reliability Score (0-100)")
     maxOverForecastMW: float = Field(..., description="Maximum positive error (over-forecast peak)")
     maxUnderForecastMW: float = Field(..., description="Maximum negative error (under-forecast peak)")
-    rampRateAlertCount: int = Field(0, description="Number of extreme generation ramp rate events detected")
-    estimatedImbalanceCostGbp: float = Field(..., description="Estimated procurement imbalance cashout exposure (£)")
-    dataPointCount: int = Field(..., description="Number of settlement intervals evaluated")
-    accuracyGrade: str = Field(..., description="Procurement risk grade: A (Excellent), B (Good), C (Moderate), D (High Risk)")
+    dataPointCount: int = Field(..., description="Number of matched delivery intervals evaluated")
+    accuracyGrade: str = Field(..., description="Performance grade: A (Excellent), B (Good), C (Moderate), D (High Error)")
 
 
 class SettlementPeriodProfileItem(BaseModel):
@@ -54,15 +52,6 @@ class ErrorBin(BaseModel):
     maxMW: float
 
 
-class RampEvent(BaseModel):
-    timestamp: datetime
-    settlementPeriod: int
-    forecastDeltaMW: float
-    actualDeltaMW: float
-    rampMismatchMW: float
-    severity: str  # LOW, MEDIUM, HIGH, CRITICAL
-
-
 class DailyAccuracyItem(BaseModel):
     date: str
     maeMW: float
@@ -75,14 +64,32 @@ class DailyAccuracyItem(BaseModel):
     accuracyGrade: str
 
 
+class ForecastPublishRun(BaseModel):
+    publishTime: str
+    cutoffLabel: str
+    maeMW: Optional[float] = None
+    rmseMW: Optional[float] = None
+    meanBiasMW: Optional[float] = None
+    data: List[Dict[str, Any]] = []
+
+
 class ForecastResponse(BaseModel):
     status: str
     source: str
     startDate: str
     endDate: str
+    decisionCutoff: str
+    selectedPublishTime: Optional[str] = None
+    availablePublishTimes: List[str] = []
     dataCount: int
     data: List[WindDataPoint]
     metrics: Optional[SummaryMetrics] = None
+
+
+class PublicationHistoryResponse(BaseModel):
+    status: str
+    targetDate: str
+    runs: List[ForecastPublishRun]
 
 
 class AnalyticsSummaryResponse(BaseModel):
@@ -109,13 +116,6 @@ class ErrorDistributionResponse(BaseModel):
     p50ErrorMW: float
     p90ErrorMW: float
     skewness: float
-
-
-class RampAnalysisResponse(BaseModel):
-    status: str
-    thresholdMWPerHour: float
-    events: List[RampEvent]
-    totalRampAlerts: int
 
 
 class HistoricalAccuracyResponse(BaseModel):

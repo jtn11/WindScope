@@ -7,6 +7,7 @@ import {
   TrendingUp,
   TrendingDown,
   Clock,
+  AlertCircle,
 } from 'lucide-react';
 import { formatMW, formatPercent, formatTimeOnly, formatSettlementPeriodTime } from '../../utils/formatters';
 import { cn } from '../../utils/cn';
@@ -30,26 +31,24 @@ export function SettlementDataTable({ data = [] }) {
   const exportCSV = () => {
     if (!data.length) return;
     const headers = [
-      'Timestamp (UTC)',
       'Settlement Period',
-      'Forecast (MW)',
-      'Actual (MW)',
-      'Offshore (MW)',
-      'Onshore (MW)',
-      'Error (MW)',
+      'Start Time (UTC)',
+      'Forecast MW (WINDFOR)',
+      'Actual Generation MW (FUELHH)',
+      'Prediction Error MW',
       'Error (%)',
+      'Forecast Publish Time',
       'Status',
     ];
 
     const rows = filteredData.map((d) => [
-      d.timestamp,
       d.settlementPeriod,
-      d.forecastMW,
+      d.startTime || d.timestamp,
+      d.forecastMW !== null ? d.forecastMW : '',
       d.actualMW !== null ? d.actualMW : '',
-      d.offshoreActualMW !== null ? d.offshoreActualMW : '',
-      d.onshoreActualMW !== null ? d.onshoreActualMW : '',
       d.errorMW !== null ? d.errorMW : '',
       d.percentageError !== null ? d.percentageError : '',
+      d.forecastPublishTime || '',
       d.status || '',
     ]);
 
@@ -60,7 +59,7 @@ export function SettlementDataTable({ data = [] }) {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `windscope_settlement_data_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `windscope_elexon_january_2026_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -71,7 +70,7 @@ export function SettlementDataTable({ data = [] }) {
       case 'ON_TARGET':
         return (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-            <CheckCircle2 className="h-2.5 w-2.5" /> ON TARGET
+            <CheckCircle2 className="h-2.5 w-2.5" /> ON TARGET (±300 MW)
           </span>
         );
       case 'OVER_FORECAST':
@@ -86,10 +85,16 @@ export function SettlementDataTable({ data = [] }) {
             <TrendingDown className="h-2.5 w-2.5" /> UNDER ({formatMW(errorMW, false)})
           </span>
         );
+      case 'MISSING_FORECAST':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+            <AlertCircle className="h-2.5 w-2.5" /> NO FORECAST
+          </span>
+        );
       default:
         return (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-            <Clock className="h-2.5 w-2.5" /> DAY-AHEAD
+            <Clock className="h-2.5 w-2.5" /> PENDING OUTTURN
           </span>
         );
     }
@@ -100,9 +105,9 @@ export function SettlementDataTable({ data = [] }) {
       {/* Table Header & Controls */}
       <div className="p-4 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-bold text-white">Settlement Period Breakdown</h3>
+          <h3 className="text-sm font-bold text-white">Settlement Period Breakdown (Matched on startTime)</h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Half-hourly electricity dispatch schedule and error telemetry ({filteredData.length} records)
+            Real Elexon data feeds: FUELHH actual outturn vs WINDFOR day-ahead forecast ({filteredData.length} records)
           </p>
         </div>
 
@@ -149,9 +154,9 @@ export function SettlementDataTable({ data = [] }) {
           <thead className="bg-slate-950/80 text-slate-400 text-[11px] uppercase tracking-wider sticky top-0 z-10 border-b border-slate-800">
             <tr>
               <th className="py-2.5 px-4">Period</th>
-              <th className="py-2.5 px-4">Time (UTC)</th>
-              <th className="py-2.5 px-4 text-right">Forecast</th>
-              <th className="py-2.5 px-4 text-right">Actual Outturn</th>
+              <th className="py-2.5 px-4">Start Time (UTC)</th>
+              <th className="py-2.5 px-4 text-right">Forecast (MW)</th>
+              <th className="py-2.5 px-4 text-right">Actual Outturn (MW)</th>
               <th className="py-2.5 px-4 text-right">Prediction Error</th>
               <th className="py-2.5 px-4 text-right">Error %</th>
               <th className="py-2.5 px-4 text-center">Status</th>
@@ -170,13 +175,13 @@ export function SettlementDataTable({ data = [] }) {
                   {formatTimeOnly(row.timestamp)} ({formatSettlementPeriodTime(row.settlementPeriod)})
                 </td>
                 <td className="py-2.5 px-4 text-right font-medium text-white">
-                  {formatMW(row.forecastMW)}
+                  {row.forecastMW !== null ? formatMW(row.forecastMW) : '—'}
                 </td>
                 <td className="py-2.5 px-4 text-right font-medium text-emerald-400">
-                  {row.actualMW !== null ? formatMW(row.actualMW) : '—'}
+                  {row.actualMW !== null && row.actualMW !== undefined ? formatMW(row.actualMW) : '—'}
                 </td>
                 <td className="py-2.5 px-4 text-right font-semibold">
-                  {row.errorMW !== null ? (
+                  {row.errorMW !== null && row.errorMW !== undefined ? (
                     <span
                       className={
                         row.errorMW > 0
@@ -193,7 +198,7 @@ export function SettlementDataTable({ data = [] }) {
                   )}
                 </td>
                 <td className="py-2.5 px-4 text-right text-slate-400">
-                  {row.percentageError !== null ? formatPercent(row.percentageError) : '—'}
+                  {row.percentageError !== null && row.percentageError !== undefined ? formatPercent(row.percentageError) : '—'}
                 </td>
                 <td className="py-2.5 px-4 text-center">
                   {getStatusBadge(row.status, row.errorMW)}

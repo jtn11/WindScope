@@ -6,8 +6,11 @@ export function Layout({
   children,
   currentTab,
   setTab,
-  days,
-  setDays,
+  startDate,
+  endDate,
+  setDateRange,
+  cutoff,
+  setCutoff,
   onRefresh,
   loading,
   lastUpdated,
@@ -16,8 +19,11 @@ export function Layout({
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       <Header
-        days={days}
-        setDays={setDays}
+        startDate={startDate}
+        endDate={endDate}
+        setDateRange={setDateRange}
+        cutoff={cutoff}
+        setCutoff={setCutoff}
         onRefresh={onRefresh}
         loading={loading}
         lastUpdated={lastUpdated}

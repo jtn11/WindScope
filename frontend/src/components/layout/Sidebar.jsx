@@ -113,7 +113,7 @@ export function Sidebar({ currentTab = 'dashboard', setTab }) {
           <span>Elexon BMRS v1</span>
         </div>
         <p className="text-[10px] text-slate-400">
-          WINDFOR Day-Ahead Forecasts & B1620 Actuals API
+          WINDFOR Forecasts & FUELHH (WIND) Stream
         </p>
       </div>
     </aside>

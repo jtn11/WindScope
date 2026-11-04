@@ -5,9 +5,8 @@ import { CorrelationScatterChart } from '../components/charts/CorrelationScatter
 import { DailyAccuracyTable } from '../components/tables/DailyAccuracyTable';
 import { MetricCard } from '../components/cards/MetricCard';
 import { ReliabilityScoreCard } from '../components/cards/ReliabilityScoreCard';
-import { FinancialImpactCard } from '../components/cards/FinancialImpactCard';
-import { formatMW, formatPercent, formatGBP } from '../utils/formatters';
-import { Target, BarChart2, ShieldAlert, Cpu, Activity, Sigma } from 'lucide-react';
+import { formatMW, formatPercent } from '../utils/formatters';
+import { Target, BarChart2, ShieldAlert, Activity, Sigma, Calendar } from 'lucide-react';
 
 export function Accuracy({
   data = [],
@@ -15,6 +14,8 @@ export function Accuracy({
   settlementProfile = [],
   distribution,
   dailyLeaderboard = [],
+  startDate = '2026-01-01',
+  endDate = '2026-01-01',
   loading,
 }) {
   return (
@@ -24,62 +25,62 @@ export function Accuracy({
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <Target className="h-5 w-5 text-cyan-400" />
-            Forecast Reliability & Error Quantification
+            Forecast Reliability & Error Quantification (January 2026)
           </h2>
           <p className="text-xs text-slate-400 mt-1">
-            Statistical breakdown of day-ahead renewable prediction errors using historical outturn data
+            Statistical prediction error evaluation calculated from real Elexon BMRS outturn (FUELHH) and forecast (WINDFOR) feeds
           </p>
         </div>
 
         <div className="flex items-center gap-2 text-xs font-mono bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
-          <Sigma className="h-3.5 w-3.5 text-cyan-400" />
-          <span>Evaluation Horizon: {dailyLeaderboard.length} Days Benchmark</span>
+          <Calendar className="h-3.5 w-3.5 text-cyan-400" />
+          <span>January 2026 Benchmark • {dailyLeaderboard.length} Days Evaluated</span>
         </div>
       </div>
 
-      {/* Accuracy KPIs */}
+      {/* Accuracy KPIs: Real MAE, RMSE, MAPE, Bias */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
           title="Mean Absolute Error (MAE)"
-          value={metrics ? formatMW(metrics.maeMW, false) : '584'}
+          value={metrics ? formatMW(metrics.maeMW, false) : '—'}
           unit="MW"
-          subtitle="Average error magnitude"
+          subtitle="Average deviation magnitude"
           icon={Activity}
           variant="cyan"
-          trend={`${metrics ? metrics.nmaePercent : '3.4'}% of Capacity`}
+          trend={`${metrics ? metrics.nmaePercent : '0.0'}% Normalized`}
           trendDirection="neutral"
         />
 
         <MetricCard
-          title="Root Mean Squared Error (RMSE)"
-          value={metrics ? formatMW(metrics.rmseMW, false) : '742'}
+          title="Root Mean Squared (RMSE)"
+          value={metrics ? formatMW(metrics.rmseMW, false) : '—'}
           unit="MW"
           subtitle="Penalizes large outlier swings"
           icon={Sigma}
           variant="amber"
-          trend={`Ratio: ${metrics ? (metrics.rmseMW / (metrics.maeMW || 1)).toFixed(2) : '1.27'}x MAE`}
+          trend={`Ratio: ${metrics ? (metrics.rmseMW / (metrics.maeMW || 1)).toFixed(2) : '1.0'}x MAE`}
           trendDirection="neutral"
         />
 
         <MetricCard
           title="Median MAPE"
-          value={metrics ? formatPercent(metrics.mapePercent) : '6.8%'}
+          value={metrics ? formatPercent(metrics.mapePercent) : '—'}
           unit=""
-          subtitle="Percentage relative to actual"
+          subtitle="Median percentage error"
           icon={BarChart2}
           variant="emerald"
-          trend="Tolerance: < 10% Optimal"
-          trendDirection="up"
+          trend="Guarded against 0 MW"
+          trendDirection="neutral"
         />
 
         <MetricCard
           title="Mean Bias Error (MBE)"
-          value={metrics ? `${metrics.meanBiasMW > 0 ? '+' : ''}${formatMW(metrics.meanBiasMW, false)}` : '+148'}
+          value={metrics ? `${metrics.meanBiasMW > 0 ? '+' : ''}${formatMW(metrics.meanBiasMW, false)}` : '—'}
           unit="MW"
-          subtitle={metrics && metrics.meanBiasMW > 0 ? 'Net Long Bias (Over-forecast)' : 'Net Short Bias'}
+          subtitle={metrics && metrics.meanBiasMW > 0 ? 'Over-forecast (Long)' : 'Under-forecast (Short)'}
           icon={ShieldAlert}
-          variant={metrics && Math.abs(metrics.meanBiasMW) < 200 ? 'emerald' : 'amber'}
-          trend={metrics && metrics.meanBiasMW > 0 ? 'Over-forecast' : 'Under-forecast'}
+          variant={metrics && metrics.meanBiasMW > 0 ? 'amber' : 'cyan'}
+          trend={metrics && metrics.meanBiasMW > 0 ? 'Systematic Over-forecast' : 'Systematic Under-forecast'}
           trendDirection="neutral"
         />
       </div>
@@ -93,23 +94,17 @@ export function Accuracy({
       {/* Diurnal Settlement Period Error Curve (48 Half-Hours) */}
       <SettlementPeriodErrorChart periods={settlementProfile} height={320} />
 
-      {/* Intelligence Cards: Reliability & Imbalance Exposure */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* Procurement Reliability Scorecard */}
+      <div className="max-w-md">
         <ReliabilityScoreCard
-          score={metrics ? metrics.reliabilityScore : 89.2}
+          score={metrics ? metrics.reliabilityScore : 88.0}
           grade={metrics ? metrics.accuracyGrade : 'A'}
-          nmae={metrics ? metrics.nmaePercent : 3.4}
-          mape={metrics ? metrics.mapePercent : 6.8}
-        />
-
-        <FinancialImpactCard
-          estimatedCost={metrics ? metrics.estimatedImbalanceCostGbp : 82450}
-          meanBias={metrics ? metrics.meanBiasMW : 148.5}
-          totalActualMWh={metrics ? metrics.totalActualMWh : 362100}
+          nmae={metrics ? metrics.nmaePercent : 3.5}
+          mape={metrics ? metrics.mapePercent : 7.0}
         />
       </div>
 
-      {/* Multi-Day Accuracy Benchmark Leaderboard */}
+      {/* Multi-Day Accuracy Benchmark Leaderboard for January 2026 */}
       <DailyAccuracyTable days={dailyLeaderboard} />
     </div>
   );

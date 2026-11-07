@@ -1,8 +1,25 @@
 # 💨 WindScope — Wind Generation Intelligence Platform
 
+[![Vercel Deployment](https://img.shields.io/badge/Frontend-Vercel%20Live-black?style=flat&logo=vercel)](https://wind-scope-mu.vercel.app/)
+[![Render Backend](https://img.shields.io/badge/Backend-Render%20FastAPI-46e3b7?style=flat&logo=render)](https://windscope-backend-oc6h.onrender.com)
+[![API Docs](https://img.shields.io/badge/Swagger%20UI-OpenAPI%203.0-green?style=flat&logo=swagger)](https://windscope-backend-oc6h.onrender.com/docs)
+[![Elexon BMRS Stream](https://img.shields.io/badge/Data%20Source-Elexon%20BMRS%20v1-0080ff?style=flat)](https://bmrs.elexon.co.uk)
+[![Tests](https://img.shields.io/badge/Pytest-13%2F13%20Passed-brightgreen?style=flat&logo=pytest)](https://github.com/jtn11/WindScope)
+
 A high-performance renewable generation intelligence platform engineered for **electricity procurement teams**, **energy trading desks**, and **portfolio managers** in the **Great Britain (GB) electricity market**.
 
 WindScope evaluates day-ahead renewable wind forecasts against physical outturn generation from **Elexon BMRS**, quantifies prediction errors (MAE, RMSE, Bias), models diurnal settlement period profiles, and tracks forecast evolution across multiple daily publication runs for **January 2026**.
+
+---
+
+## 🌐 Live Production Deployments
+
+| Component | Provider | URL | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Frontend Application** | Vercel | **[https://wind-scope-mu.vercel.app/](https://wind-scope-mu.vercel.app/)** | Interactive trading dashboard, visual analytics, date filters, and CSV export |
+| **Backend REST API** | Render | **[https://windscope-backend-oc6h.onrender.com](https://windscope-backend-oc6h.onrender.com)** | Asynchronous FastAPI service running Pandas/NumPy statistical engine |
+| **API Documentation** | Swagger UI | **[https://windscope-backend-oc6h.onrender.com/docs](https://windscope-backend-oc6h.onrender.com/docs)** | Interactive OpenAPI test sandbox & endpoint schema reference |
+| **Health Check** | Render | **[https://windscope-backend-oc6h.onrender.com/api/health](https://windscope-backend-oc6h.onrender.com/api/health)** | Live Elexon stream dataset connectivity status |
 
 ---
 
@@ -92,9 +109,9 @@ $$\text{Score} = 100 - (\text{nMAE} \times 3.8) - \left( \frac{|\text{MBE}|}{\te
 | **Analytics Engine**| Pandas + NumPy | High-speed vectorized statistical processing |
 | **HTTP Client** | HTTPX | Asynchronous HTTP client for Elexon BMRS stream endpoints |
 | **Data Validation** | Pydantic (v2) | Strict schema validation and serialization |
-| **Testing** | Pytest + Pytest-Asyncio | Automated backend unit and integration test suite |
+| **Testing** | Pytest + Pytest-Asyncio | Automated backend unit and integration test suite (13/13 passing) |
 | **Containerization**| Docker + Docker Compose | One-command multi-container environment |
-| **Cloud Hosting** | Vercel | Production serverless API and SPA hosting |
+| **Cloud Hosting** | Vercel (Frontend) + Render (Backend) | Production decoupled cloud deployment |
 
 ---
 
@@ -130,7 +147,7 @@ WindScope/
 │   │   │   ├── Accuracy.jsx                        # Error distributions & diurnal profiles
 │   │   │   └── Methodology.jsx                     # Market rules, formulas & API docs
 │   │   ├── services/
-│   │   │   └── api.js                              # Frontend API client with graceful fallback
+│   │   │   └── api.js                              # API client with VITE_API_BASE_URL normalization
 │   │   ├── hooks/
 │   │   │   ├── useForecastData.js                  # Time-series state & publication history hook
 │   │   │   └── useAccuracyMetrics.js               # Statistical error distribution hook
@@ -165,15 +182,23 @@ WindScope/
 │   ├── requirements.txt
 │   └── Dockerfile
 │
-├── api/                                            # Vercel serverless Python runtime
-│   ├── index.py
-│   └── requirements.txt
-│
-├── vercel.json                                     # Vercel deployment routes and builds
+├── vercel.json                                     # Vercel deployment routes & Render edge proxy
 ├── docker-compose.yml                              # Multi-container orchestration
 ├── README.md
 └── .gitignore
 ```
+
+---
+
+## ⚙️ Environment Variables
+
+### Frontend Configuration (`frontend/.env` or Vercel Environment Variables)
+
+| Variable | Default Value | Description |
+| :--- | :--- | :--- |
+| `VITE_API_BASE_URL` | `https://windscope-backend-oc6h.onrender.com` | Base URL of the deployed FastAPI backend. The frontend automatically ensures `/api` is prefixed and strips trailing slashes. |
+
+In local development, if `VITE_API_BASE_URL` is omitted, the Vite dev server automatically proxies relative `/api` requests to `http://localhost:8000`.
 
 ---
 
@@ -255,18 +280,28 @@ backend/tests/test_date_utils.py::test_parse_iso_datetime PASSED
 
 ---
 
-## 🌐 Vercel Deployment
+## 🌐 Production Cloud Architecture
 
-WindScope is pre-configured for **Vercel deployment** via `vercel.json` and `api/index.py`:
+```mermaid
+flowchart LR
+    A["User Browser"] -->|"HTTPS"| B["Vercel SPA<br/>(wind-scope-mu.vercel.app)"]
+    A -->|"API Requests (VITE_API_BASE_URL)"| C["Render Web Service<br/>(windscope-backend-oc6h.onrender.com)"]
+    B -->|"/api/* Edge Proxy Rewrite"| C
+    C -->|"GET /datasets/FUELHH/stream"| D["Elexon BMRS API<br/>Actual Wind Generation"]
+    C -->|"GET /datasets/WINDFOR/stream"| E["Elexon BMRS API<br/>Wind Generation Forecast"]
+```
 
-1. Push your repository to **GitHub** or **GitLab**.
-2. Go to [vercel.com](https://vercel.com) and import the repository.
-3. Configure the project:
-   - **Framework Preset:** Vite
-   - **Root Directory:** `./`
-   - **Build Command:** `cd frontend && npm install && npm run build`
-   - **Output Directory:** `frontend/dist`
-4. Click **Deploy**. Vercel will build the frontend SPA and route `/api/*` to the Python serverless function in `api/index.py`.
+### 1. Frontend on Vercel
+- **Project Type:** Single Page Application (SPA).
+- **Build Command:** `cd frontend && npm install && npm run build`
+- **Output Directory:** `frontend/dist`
+- **Edge Routing (`vercel.json`):** Proxies any `/api/:path*` request to `https://windscope-backend-oc6h.onrender.com/api/:path*` and rewrites all client-side page routes to `index.html`.
+
+### 2. Backend on Render
+- **Service Type:** Web Service (Python 3.11+).
+- **Build Command:** `pip install -r backend/requirements.txt`
+- **Start Command:** `uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT`
+- **CORS Support:** Configured for `https://wind-scope-mu.vercel.app` and `https://.*\.vercel\.app`.
 
 ---
 

@@ -5,13 +5,75 @@
  * - Forecast wind generation: /datasets/WINDFOR/stream
  */
 
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+function getApiBase() {
+  const envUrl = (
+    import.meta.env.VITE_API_BASE_URL ||
+    import.meta.env.VITE_API_URL ||
+    ''
+  ).trim();
+
+  let base = envUrl;
+
+  // Auto-correct common 0 vs o typo in render subdomain (0c6h -> oc6h)
+  if (base.includes('windscope-backend-0c6h.onrender.com')) {
+    base = base.replace('windscope-backend-0c6h.onrender.com', 'windscope-backend-oc6h.onrender.com');
+  }
+
+  // Strip trailing slashes
+  base = base.replace(/\/+$/, '');
+
+  if (base) {
+    // If backend base URL provided, ensure /api is included since FastAPI routes are prefixed with /api
+    return base.endsWith('/api') ? base : `${base}/api`;
+  }
+
+  // In production, fallback directly to the live Render FastAPI backend
+  if (import.meta.env.PROD) {
+    return 'https://windscope-backend-oc6h.onrender.com/api';
+  }
+
+  // In local development, use relative /api proxied by Vite dev server
+  return '/api';
+}
+
+const API_BASE = getApiBase();
 
 async function handleResponse(response) {
+  const contentType = response.headers.get('content-type') || '';
+
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API Error ${response.status}: ${errorText || response.statusText}`);
+    let errorDetail = response.statusText;
+    try {
+      if (contentType.includes('application/json')) {
+        const errorJson = await response.json();
+        errorDetail = errorJson.detail || errorJson.message || JSON.stringify(errorJson);
+      } else {
+        const text = await response.text();
+        errorDetail = text.trim().startsWith('<') 
+          ? `Server returned HTTP ${response.status}` 
+          : text.slice(0, 300);
+      }
+    } catch {
+      // Use statusText fallback
+    }
+    throw new Error(`API Error ${response.status}: ${errorDetail}`);
   }
+
+  // Verify response is actually JSON before calling response.json()
+  if (!contentType.includes('application/json')) {
+    const rawText = await response.text();
+    if (rawText.trim().startsWith('<!doctype') || rawText.trim().startsWith('<html')) {
+      throw new Error(
+        `API returned HTML instead of JSON. Ensure VITE_API_BASE_URL points to the active FastAPI backend (${API_BASE}).`
+      );
+    }
+    try {
+      return JSON.parse(rawText);
+    } catch {
+      throw new Error(`Invalid non-JSON response from server: ${rawText.slice(0, 100)}`);
+    }
+  }
+
   return response.json();
 }
 

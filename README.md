@@ -1,19 +1,82 @@
 # 💨 WindScope — Wind Generation Intelligence Platform
 
-A high-performance renewable generation intelligence platform engineered for **electricity procurement teams**, **energy trading desks**, and **portfolio managers** in the **Great Britain (GB) electricity market**. 
+A high-performance renewable generation intelligence platform engineered for **electricity procurement teams**, **energy trading desks**, and **portfolio managers** in the **Great Britain (GB) electricity market**.
 
-WindScope analyzes day-ahead renewable wind forecasts against physical outturn generation from **Elexon BMRS**, evaluates forecast reliability, quantifies prediction error distributions, and models financial imbalance cash-out risks under the **Balancing and Settlement Code (BSC)**.
+WindScope evaluates day-ahead renewable wind forecasts against physical outturn generation from **Elexon BMRS**, quantifies prediction errors (MAE, RMSE, Bias), models diurnal settlement period profiles, and tracks forecast evolution across multiple daily publication runs for **January 2026**.
 
 ---
 
 ## ⚡ Problem & Value Proposition
 
-In liberalized wholesale electricity markets (e.g., EPEX SPOT and Nord Pool), procurement desks must balance energy positions by **12:00 PM D-1 (Day-Ahead Auction)**:
-- **Systematic Over-forecasting (Long Position):** Yields surplus renewable commitments, risking spilled energy or receiving discount **System Sell Price (SSP)**.
-- **Systematic Under-forecasting (Short Position):** Forces procurement teams into the balancing mechanism, incurring punitive **System Buy Price (SBP)** cash-out spreads (~£65–£85/MWh).
-- **Extreme Generation Ramps:** Rapid swings exceeding 1,200 MW/hr stress grid balancing units and trigger volatile price spikes.
+In GB wholesale electricity markets (e.g., EPEX SPOT and Nord Pool), procurement desks must balance physical positions prior to **Day-Ahead Gate Closure (12:00 D-1)**:
+- **Systematic Over-forecasting (Long Position):** Commits procurement teams to purchase excessive renewable volume, risking spilled energy or receiving discount imbalance cash-out prices.
+- **Systematic Under-forecasting (Short Position):** Forces desks into the balancing mechanism, exposing portfolios to volatile System Buy Price (SBP) spikes.
+- **Publication Lag & Uncertainty:** Forecasts evolve throughout D-1 (`02:30`, `04:30`, `07:30`, `09:30`, `11:30`, `15:30`, `18:30`, `22:30`). Purchasing decisions made at 12:00 D-1 must lock in the most accurate pre-auction publication (`11:30 D-1`).
 
-**WindScope provides the quantitative toolkit to derisk day-ahead trading and hedging.**
+**WindScope provides the quantitative toolkit and historical audit trail to evaluate forecast reliability and de-risk day-ahead hedging.**
+
+---
+
+## 📡 Live Elexon BMRS Stream API Integration
+
+WindScope integrates directly with real-time streaming datasets from the official **Elexon BMRS API v1**:
+
+| Dataset | Stream Endpoint | Query Parameters | Description |
+| :--- | :--- | :--- | :--- |
+| **Actual Generation** | `/datasets/FUELHH/stream` | `settlementDateFrom=YYYY-MM-DD`<br>`settlementDateTo=YYYY-MM-DD`<br>`fuelType=WIND` | National-level half-hourly physical wind outturn generation (MW) across 48 settlement periods. |
+| **Forecast Generation** | `/datasets/WINDFOR/stream` | `publishDateTimeFrom=...Z`<br>`publishDateTimeTo=...Z` | National wind generation forecasts (MW) with publication timestamps (`publishTime`) and delivery start times (`startTime`). |
+
+### 1. ISO UTC `startTime` Matching Logic
+- **Actuals (`FUELHH`):** Delivered on half-hourly settlement periods with ISO UTC `startTime` (`00:00:00Z`, `00:30:00Z`, `01:00:00Z`, etc.).
+- **Forecasts (`WINDFOR`):** Issued on hourly delivery intervals (`00:00:00Z`, `01:00:00Z`, etc.).
+- **Alignment:** Each half-hour actual is aligned with the active forecast for its delivery hour window using `startTime`. Error is calculated as:
+  $$\text{Error}_i = \text{Forecast}_i - \text{Actual}_i \quad (\text{MW})$$
+
+### 2. Purchasing Decision Cutoff (D-1 12:00 Gate Closure)
+- GB Day-Ahead energy auctions close at **12:00 PM D-1**.
+- WindScope filters all `WINDFOR` publications released on or before the cutoff time (default: **12:00 D-1**, which selects the **11:30 D-1** publication run).
+- Users can switch between standard market cutoffs (`10:00`, `12:00`, `15:00`, `18:00`) or select individual publication runs.
+
+### 3. Forecast Evolution & Publication History
+- Analyzes how wind forecasts converge or diverge across all D-1 and intraday publication runs for any selected January 2026 delivery date.
+- Tracks progressive MAE, RMSE, and bias across publish runs (`02:30` through `22:30`).
+
+---
+
+## 📊 Quantitative Metrics & Formulas
+
+All statistical operations are computed dynamically using vectorized **Pandas** and **NumPy**:
+
+### 1. Mean Absolute Error (MAE)
+$$\text{MAE} = \frac{1}{N} \sum_{i=1}^{N} |\text{Forecast}_i - \text{Actual}_i|$$
+Measures average magnitude of forecast deviation in megawatts (MW).
+
+### 2. Root Mean Squared Error (RMSE)
+$$\text{RMSE} = \sqrt{\frac{1}{N} \sum_{i=1}^{N} (\text{Forecast}_i - \text{Actual}_i)^2}$$
+Penalizes severe outlier errors heavily to highlight extreme market volatility risks.
+
+### 3. Mean Bias Error (MBE)
+$$\text{MBE} = \frac{1}{N} \sum_{i=1}^{N} (\text{Forecast}_i - \text{Actual}_i)$$
+Quantifies systematic portfolio exposure:
+- **Positive Bias (+):** Over-forecasting tendency (portfolio risks being systematically long).
+- **Negative Bias (-):** Under-forecasting tendency (portfolio risks being systematically short).
+
+### 4. Median Percentage Error (Median MAPE)
+$$\text{MAPE} = \text{Median} \left( \frac{|\text{Forecast}_i - \text{Actual}_i|}{\text{Actual}_i} \right) \times 100\%$$
+Evaluates relative forecast error, robustly filtered against near-zero generation periods.
+
+### 5. Normalized MAE (nMAE)
+$$\text{nMAE} = \left( \frac{\text{MAE}}{\text{GB Fleet Capacity (30,500 MW)}} \right) \times 100\%$$
+
+### 6. Procurement Reliability Score (0–100) & Grade
+$$\text{Score} = 100 - (\text{nMAE} \times 3.8) - \left( \frac{|\text{MBE}|}{\text{Capacity}} \times 40 \right)$$
+- **Grade A (88–100):** High reliability, optimal for day-ahead baseload procurement.
+- **Grade B (75–87):** Moderate reliability, recommend 5–10% intraday reserve buffer.
+- **Grade C (60–74):** Elevated volatility, active intraday balancing advised.
+- **Grade D (< 60):** Severe mismatch risk, hedge with flexible dispatch assets.
+
+> [!NOTE]
+> **Data Integrity:** In accordance with official Elexon BMRS specifications, `FUELHH` provides aggregate national-level wind outturn generation. Unsupported speculative metrics (such as cash-out financial penalties or unmetered offshore/onshore splits) have been omitted in favor of verified physical metrics.
 
 ---
 
@@ -21,81 +84,79 @@ In liberalized wholesale electricity markets (e.g., EPEX SPOT and Nord Pool), pr
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | React (v18) + Vite | High-performance reactive dashboard |
-| **Language** | JavaScript (ESModules) | Frontend logic and interactions |
-| **Styling** | Tailwind CSS | Modern energy-trading dark-mode design system |
-| **Components** | shadcn/ui aesthetic | Professional, accessible UI primitives |
-| **Charts** | Recharts | Forecast curves, error distributions, parity plots |
-| **Backend** | Python 3.11+ / FastAPI | Asynchronous REST APIs |
-| **Data Processing** | Pandas + NumPy | Vectorized statistical calculations |
-| **HTTP Client** | HTTPX | Async Elexon BMRS API v1 integration |
-| **Validation** | Pydantic (v2) | Schema validation and serialization |
-| **Testing** | Pytest + Pytest-Asyncio | Unit and integration test suite |
-| **Container** | Docker + Docker Compose | Multi-container orchestration |
-| **Deployment** | Vercel | Production serverless and SPA hosting |
+| **Frontend** | React 18 + Vite | High-performance reactive trading interface |
+| **Styling** | Tailwind CSS | Sleek dark-mode energy-trading UI aesthetic |
+| **Visualizations** | Recharts | Multi-series curves, histograms, scatter plots, and history heatmaps |
+| **Icons** | Lucide React | Modern, accessible iconography |
+| **Backend** | Python 3.11+ / FastAPI | Asynchronous REST API service |
+| **Analytics Engine**| Pandas + NumPy | High-speed vectorized statistical processing |
+| **HTTP Client** | HTTPX | Asynchronous HTTP client for Elexon BMRS stream endpoints |
+| **Data Validation** | Pydantic (v2) | Strict schema validation and serialization |
+| **Testing** | Pytest + Pytest-Asyncio | Automated backend unit and integration test suite |
+| **Containerization**| Docker + Docker Compose | One-command multi-container environment |
+| **Cloud Hosting** | Vercel | Production serverless API and SPA hosting |
 
 ---
 
 ## 📁 Project Structure
 
 ```
-windscope/
+WindScope/
 │
 ├── frontend/
 │   ├── public/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── layout/
-│   │   │   │   ├── Header.jsx          # GB Grid status, UTC clock, horizon selector
-│   │   │   │   ├── Sidebar.jsx         # Navigation menu & market capacity stats
-│   │   │   │   └── Layout.jsx          # Shell layout wrapper
+│   │   │   │   ├── Header.jsx                      # January 2026 status, UTC clock, active range
+│   │   │   │   ├── Sidebar.jsx                     # Navigation menu & GB market specs
+│   │   │   │   └── Layout.jsx                      # Responsive dark shell layout
 │   │   │   ├── charts/
-│   │   │   │   ├── GenerationForecastChart.jsx  # Main interactive forecast curve
-│   │   │   │   ├── ErrorDistributionChart.jsx   # Error histogram with P10/P50/P90
-│   │   │   │   ├── SettlementPeriodErrorChart.jsx # 48 diurnal period error curve
-│   │   │   │   └── CorrelationScatterChart.jsx  # 45° parity plot (Forecast vs Actual)
+│   │   │   │   ├── GenerationForecastChart.jsx      # Forecast vs actual generation time-series
+│   │   │   │   ├── ForecastPublicationHistoryChart.jsx # Multi-publish evolution across D-1 runs
+│   │   │   │   ├── ErrorDistributionChart.jsx       # Error histogram with P10 / P50 / P90
+│   │   │   │   ├── SettlementPeriodErrorChart.jsx   # 48-period diurnal error profile
+│   │   │   │   └── CorrelationScatterChart.jsx      # Parity scatter plot with 45° line
 │   │   │   ├── cards/
-│   │   │   │   ├── MetricCard.jsx       # Reusable KPI card with variants
-│   │   │   │   ├── ReliabilityScoreCard.jsx # 0-100 reliability index & Grade A-D
-│   │   │   │   ├── FinancialImpactCard.jsx  # Imbalance volume & £ cashout exposure
-│   │   │   │   └── RampAlertCard.jsx    # Steep ramp rate detection (>1,200 MW/hr)
+│   │   │   │   ├── MetricCard.jsx                   # Reusable KPI card (MAE, RMSE, Bias, Peak)
+│   │   │   │   ├── ReliabilityScoreCard.jsx         # 0–100 reliability score and Grade A–D
+│   │   │   │   └── RampAlertCard.jsx                # Ramp rate detection (>1,200 MW/hr)
 │   │   │   └── tables/
-│   │   │       ├── SettlementDataTable.jsx # Filterable table with CSV export
-│   │   │       └── DailyAccuracyTable.jsx  # Multi-day benchmark leaderboard
+│   │   │       ├── SettlementDataTable.jsx          # Settlement period table with CSV export
+│   │   │       └── DailyAccuracyTable.jsx           # January multi-day benchmark leaderboard
 │   │   ├── pages/
-│   │   │   ├── Dashboard.jsx           # Executive procurement overview
-│   │   │   ├── Forecast.jsx            # Day-ahead horizon & offshore/onshore split
-│   │   │   ├── Accuracy.jsx            # Deep statistical error quantification
-│   │   │   └── Methodology.jsx         # Market architecture & formula guides
+│   │   │   ├── Dashboard.jsx                       # Executive procurement overview
+│   │   │   ├── Forecast.jsx                        # Time-series curves & publication history
+│   │   │   ├── Accuracy.jsx                        # Error distributions & diurnal profiles
+│   │   │   └── Methodology.jsx                     # Market rules, formulas & API docs
 │   │   ├── services/
-│   │   │   └── api.js                  # API service with high-fidelity simulation fallback
+│   │   │   └── api.js                              # Frontend API client with graceful fallback
 │   │   ├── hooks/
-│   │   │   ├── useForecastData.js      # Time-series forecast state
-│   │   │   └── useAccuracyMetrics.js   # Analytics & distribution state
+│   │   │   ├── useForecastData.js                  # Time-series state & publication history hook
+│   │   │   └── useAccuracyMetrics.js               # Statistical error distribution hook
 │   │   ├── utils/
-│   │   │   ├── formatters.js           # MW, GW, GBP, settlement periods
-│   │   │   └── cn.js                   # ClassName merging utility
-│   │   ├── App.jsx
+│   │   │   ├── formatters.js                       # MW, GW, dates, and settlement periods
+│   │   │   └── cn.js                               # Tailwind class merger
+│   │   ├── App.jsx                                 # Routing & global January date filter state
 │   │   ├── main.jsx
 │   │   └── index.css
-│   ├── tailwind.config.js
-│   ├── postcss.config.js
 │   ├── vite.config.js
+│   ├── tailwind.config.js
 │   ├── package.json
 │   └── Dockerfile
 │
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                     # FastAPI application & CORS configuration
+│   │   ├── main.py                                 # FastAPI application & CORS setup
 │   │   ├── api/
-│   │   │   └── routes.py               # REST endpoints for forecast & analytics
+│   │   │   └── routes.py                           # REST endpoints for forecast & analytics
 │   │   ├── services/
-│   │   │   ├── elexon_service.py       # Live Elexon BMRS API client with caching
-│   │   │   └── analytics_service.py    # Pandas/NumPy statistical engine
+│   │   │   ├── elexon_service.py                   # Elexon FUELHH & WINDFOR stream client
+│   │   │   └── analytics_service.py                # Pandas matching & statistical engine
 │   │   ├── schemas/
-│   │   │   └── forecast.py             # Pydantic models for data & metrics
+│   │   │   └── forecast.py                         # Pydantic models for responses & metrics
 │   │   └── utils/
-│   │       └── date_utils.py           # GB 48-period settlement calculations
+│   │       └── date_utils.py                       # Settlement period (1–48) conversions
 │   ├── tests/
 │   │   ├── test_elexon_service.py
 │   │   ├── test_analytics_service.py
@@ -104,47 +165,15 @@ windscope/
 │   ├── requirements.txt
 │   └── Dockerfile
 │
-├── api/                                # Vercel Python serverless function entry
+├── api/                                            # Vercel serverless Python runtime
 │   ├── index.py
 │   └── requirements.txt
 │
-├── vercel.json                         # Vercel deployment configuration
-├── docker-compose.yml                  # Local container orchestration
-├── README.md                           # Documentation
+├── vercel.json                                     # Vercel deployment routes and builds
+├── docker-compose.yml                              # Multi-container orchestration
+├── README.md
 └── .gitignore
 ```
-
----
-
-## 📊 Quantitative Metrics & Formulas
-
-All statistical operations are computed using vectorized **Pandas** and **NumPy**:
-
-### 1. Mean Absolute Error (MAE)
-$$\text{MAE} = \frac{1}{N} \sum_{i=1}^{N} |\text{Forecast}_i - \text{Actual}_i|$$
-Measures average magnitude of forecast deviation in megawatts (MW).
-
-### 2. Root Mean Squared Error (RMSE)
-$$\text{RMSE} = \sqrt{\frac{1}{N} \sum_{i=1}^{N} (\text{Forecast}_i - \text{Actual}_i)^2}$$
-Penalizes severe outlier errors heavily to highlight market risk spikes.
-
-### 3. Mean Absolute Percentage Error (MAPE)
-$$\text{MAPE} = \text{Median} \left( \frac{|\text{Forecast}_i - \text{Actual}_i|}{\text{Actual}_i} \right) \times 100\%$$
-Evaluates relative accuracy. Filtered against zero-generation artifacts.
-
-### 4. Mean Bias Error (MBE)
-$$\text{MBE} = \frac{1}{N} \sum_{i=1}^{N} (\text{Forecast}_i - \text{Actual}_i)$$
-Identifies directional portfolio hedging tendency (+ = over-forecast/long; - = under-forecast/short).
-
-### 5. Procurement Reliability Score (0–100) & Grade
-$$\text{Score} = 100 - (\text{nMAE} \times 3.8) - \left( \frac{|\text{MBE}|}{\text{Capacity}} \times 40 \right)$$
-- **Grade A (88–100):** High reliability, optimal for day-ahead baseloading.
-- **Grade B (75–87):** Moderate reliability, recommend 10% reserve buffer.
-- **Grade C (60–74):** Elevated volatility, active intraday balancing advised.
-- **Grade D (< 60):** Severe mismatch risk.
-
-### 6. Imbalance Cashout Risk Exposure (£)
-$$\text{Exposure} = \sum \left( |\text{Error MW}_i| \times 0.5\,\text{h} \times \text{SBP/SSP Spread (£68.50/MWh)} \right)$$
 
 ---
 
@@ -158,9 +187,9 @@ To run the entire full-stack application (FastAPI backend + Vite React frontend)
 docker-compose up --build
 ```
 
-- **Frontend:** Open [http://localhost:3000](http://localhost:3000)
-- **Backend API Docs:** Open [http://localhost:8000/docs](http://localhost:8000/docs)
-- **Backend Health:** Open [http://localhost:8000/api/health](http://localhost:8000/api/health)
+- **Frontend Application:** [http://localhost:3000](http://localhost:3000)
+- **FastAPI OpenAPI Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Backend Health Check:** [http://localhost:8000/api/health](http://localhost:8000/api/health)
 
 ---
 
@@ -168,52 +197,52 @@ docker-compose up --build
 
 #### 1. Backend Setup
 ```bash
-# Navigate to backend
+# Navigate to backend directory
 cd backend
 
-# Create virtual environment
+# Create and activate Python virtual environment
 python3 -m venv .venv
-source .venv/bin/activate   # On Windows: .venv\Scripts\activate
+source .venv/bin/activate       # On Windows: .venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Run FastAPI dev server
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Start FastAPI server on port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 #### 2. Frontend Setup
 ```bash
-# In a new terminal, navigate to frontend
+# In a new terminal, navigate to frontend directory
 cd frontend
 
-# Install dependencies
+# Install npm dependencies
 npm install
 
-# Start Vite dev server
+# Start Vite dev server on port 5173
 npm run dev
 ```
 
-Visit [http://localhost:5173](http://localhost:5173). The frontend automatically proxies `/api` requests to `http://localhost:8000`.
+Visit **[http://localhost:5173](http://localhost:5173)** in your browser. The Vite dev server automatically proxies `/api` requests to `http://127.0.0.1:8000`.
 
 ---
 
 ## 🧪 Running Automated Tests
 
-A comprehensive **Pytest** test suite covers settlement calculations, analytics algorithms, and API endpoints:
+The backend test suite verifies date utilities, statistical calculations, stream matching, and API routes:
 
 ```bash
-# Run pytest from backend directory
 backend/.venv/bin/pytest backend/tests/ -v
 ```
 
-Expected output:
+Expected test output:
 ```
-backend/tests/test_analytics_service.py::test_merge_and_align_data PASSED
+backend/tests/test_analytics_service.py::test_match_actual_and_forecast_on_starttime PASSED
 backend/tests/test_analytics_service.py::test_calculate_summary_metrics PASSED
-backend/tests/test_analytics_service.py::test_detect_ramp_events PASSED
+backend/tests/test_analytics_service.py::test_filter_forecast_at_cutoff PASSED
 backend/tests/test_api_routes.py::test_health_endpoint PASSED
 backend/tests/test_api_routes.py::test_forecast_latest_endpoint PASSED
+backend/tests/test_api_routes.py::test_publication_history_endpoint PASSED
 backend/tests/test_api_routes.py::test_analytics_summary_endpoint PASSED
 backend/tests/test_api_routes.py::test_settlement_profile_endpoint PASSED
 backend/tests/test_api_routes.py::test_error_distribution_endpoint PASSED
@@ -221,43 +250,53 @@ backend/tests/test_date_utils.py::test_get_settlement_period PASSED
 backend/tests/test_date_utils.py::test_settlement_period_to_time_range PASSED
 backend/tests/test_date_utils.py::test_format_elexon_date PASSED
 backend/tests/test_date_utils.py::test_parse_iso_datetime PASSED
-======================== 12 passed in 7.33s =========================
+======================== 13 passed in 0.43s =========================
 ```
 
 ---
 
 ## 🌐 Vercel Deployment
 
-WindScope is pre-configured for **instant Vercel deployment** via `vercel.json`:
+WindScope is pre-configured for **Vercel deployment** via `vercel.json` and `api/index.py`:
 
-1. Push your repository to **GitHub** / **GitLab**.
+1. Push your repository to **GitHub** or **GitLab**.
 2. Go to [vercel.com](https://vercel.com) and import the repository.
-3. Keep default settings:
+3. Configure the project:
    - **Framework Preset:** Vite
    - **Root Directory:** `./`
    - **Build Command:** `cd frontend && npm install && npm run build`
    - **Output Directory:** `frontend/dist`
-4. Click **Deploy**. Vercel will deploy the static React SPA and automatically wire the `/api` serverless Python runtime.
+4. Click **Deploy**. Vercel will build the frontend SPA and route `/api/*` to the Python serverless function in `api/index.py`.
 
 ---
 
 ## 🔌 API Endpoints Reference
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/api/health` | System health check and Elexon market connection status |
-| `GET` | `/api/forecast/latest?days=2` | Latest day-ahead & intraday time-series forecast and actuals |
-| `GET` | `/api/forecast/range?start_date=&end_date=` | Custom historical range time-series data |
-| `GET` | `/api/analytics/summary` | Quantitative KPIs (MAE, RMSE, MAPE, Bias, Reliability Score) |
-| `GET` | `/api/analytics/settlement-profile` | 48-period diurnal error curve across the delivery day |
-| `GET` | `/api/analytics/error-distribution` | Histogram error bins, P10, P50, P90 quantiles & skewness |
-| `GET` | `/api/analytics/ramps?threshold=1200` | Steep generation ramp events (>1,200 MW/hr) |
-| `GET` | `/api/analytics/daily-accuracy` | Multi-day accuracy benchmark leaderboard table |
+| Method | Endpoint | Query Parameters | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/health` | None | System status and Elexon dataset connectivity verification. |
+| `GET` | `/api/forecast/range` | `start_date=2026-01-01`<br>`end_date=2026-01-07`<br>`cutoff=12:00`<br>`publish_time=` | Time-series actuals (`FUELHH`) matched with forecast (`WINDFOR`) on `startTime`. |
+| `GET` | `/api/forecast/latest` | `days=2`<br>`cutoff=12:00` | Latest multi-day forecast and actuals window. |
+| `GET` | `/api/forecast/publication-history` | `target_date=2026-01-01` | Forecast curves across all D-1 publication runs (`02:30` to `22:30`) with error progression. |
+| `GET` | `/api/analytics/summary` | `start_date=`<br>`end_date=`<br>`cutoff=12:00` | Summary metrics: MAE, RMSE, Mean Bias, Median MAPE, Peak Generation, Reliability Score. |
+| `GET` | `/api/analytics/settlement-profile`| `start_date=`<br>`end_date=`<br>`cutoff=12:00` | 48-period diurnal profile showing mean error and standard deviation per settlement period. |
+| `GET` | `/api/analytics/error-distribution`| `start_date=`<br>`end_date=`<br>`cutoff=12:00` | Error histogram binned across MW intervals with P10, P50, and P90 quantiles. |
+| `GET` | `/api/analytics/daily-accuracy` | `start_date=`<br>`end_date=`<br>`cutoff=12:00` | Multi-day accuracy benchmark leaderboard table for January 2026. |
+| `GET` | `/api/analytics/ramps` | `threshold=1200` | Detects rapid generation ramp events (>1,200 MW/hr). |
 
 Interactive OpenAPI documentation is available at `/docs` (Swagger UI) and `/redoc`.
 
 ---
 
-## 🛡️ License
+## 📄 Settlement Data Export (CSV)
 
-MIT License. Developed for energy procurement teams, analysts, and traders. Data provided by Elexon BMRS open data platform under the Open Government Licence (OGL).
+From the **Forecast** page, users can export all filtered half-hourly settlement records to CSV:
+- Fields: `settlementDate`, `settlementPeriod`, `startTime`, `forecastMW`, `actualMW`, `errorMW`, `percentageError`, `forecastPublishTime`, `status`.
+- Format: RFC 4180 compliant CSV ready for Excel, Python Pandas, or trading desk modeling.
+
+---
+
+## 🛡️ License & Data Attribution
+
+- **License:** MIT License. Developed for energy procurement teams, quantitative analysts, and traders.
+- **Data Source:** Elexon BMRS Open Data platform under the UK [Open Government Licence (OGL v3.0)](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/).
